@@ -1,0 +1,408 @@
+import tensorflow as tf
+print(tf.__version__)
+print(tf.test.gpu_device_name())
+
+from google.colab import drive
+drive.mount('/content/drive')
+from tensorflow.keras.callbacks import TensorBoard
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import BatchNormalization
+from tensorflow.keras.layers import SeparableConv2D
+from tensorflow.keras.layers import MaxPooling2D
+from tensorflow.keras.layers import Activation
+from tensorflow.keras.layers import Flatten
+from tensorflow.keras.layers import Dropout
+from tensorflow.keras.layers import Dense
+
+class FireDetectionNet:
+  @staticmethod
+  def build(width, height, depth, classes):
+    model3 = Sequential()
+    inputShape = (height, width, depth)
+    chanDim = -1
+
+		# CONV => RELU => POOL
+    model3.add(SeparableConv2D(32, (7, 7), padding="same",input_shape=inputShape))
+    model3.add(Activation("relu"))
+    model3.add(BatchNormalization(axis=chanDim))
+    model3.add(MaxPooling2D(pool_size=(2, 2)))
+
+		# CONV => RELU => POOL
+    model3.add(SeparableConv2D(64, (3, 3), padding="same"))
+    model3.add(Activation("relu"))
+    model3.add(BatchNormalization(axis=chanDim))
+    model3.add(MaxPooling2D(pool_size=(2, 2)))
+
+		# (CONV => RELU) * 2 => POOL
+    model3.add(SeparableConv2D(128, (3, 3), padding="same"))
+    model3.add(Activation("relu"))
+    model3.add(BatchNormalization(axis=chanDim))
+    model3.add(SeparableConv2D(256, (3, 3), padding="same"))
+    model3.add(Activation("relu"))
+    model3.add(BatchNormalization(axis=chanDim))
+    model3.add(MaxPooling2D(pool_size=(2, 2)))
+
+		# first set of FC => RELU layers
+    model3.add(Flatten())
+    model3.add(Dense(128))
+    model3.add(Activation("relu"))
+    model3.add(BatchNormalization())
+    model3.add(Dropout(0.34))
+		# second set of FC => RELU layers
+    model3.add(Dense(128))
+    model3.add(Activation("swish"))
+    model3.add(BatchNormalization())
+    model3.add(Dropout(0.33))
+    # third set of FC => RELU layers
+    model3.add(Dense(128))
+    model3.add(Activation("relu"))
+    model3.add(BatchNormalization())
+    model3.add(Dropout(0.33))
+
+		# softmax classifier
+    model3.add(Dense(classes))
+    model3.add(Activation("softmax"))
+		# return the constructed network architecture
+    return model3
+
+FIRE_PATH = '/content/drive/MyDrive/fire-dataset/fire_dataset/new_fire_images'
+NON_FIRE_PATH = '/content/drive/MyDrive/fire-dataset/fire_dataset/new_non_fire_images'
+import os
+# initialize the class labels in the dataset
+CLASSES = ["Non-Fire", "Fire"]
+
+# define the size of the training and testing split
+TRAIN_SPLIT = 0.70
+TEST_SPLIT = 0.30
+
+
+# set the path to the serialized model after training
+MODEL_PATH = os.path.sep.join(["/content/drive/MyDrive/fire-dataset/store_op", "fire_detection.model"])
+
+# define the path to the output learning rate finder plot and
+# training history plot
+LRFIND_PLOT_PATH = os.path.sep.join(["/content/drive/MyDrive/fire-dataset/store_op", "lrfind_plot.png"])
+TRAINING_PLOT_PATH = os.path.sep.join(["/content/drive/MyDrive/fire-dataset/store_op", "training_plot.png"])
+
+# define the path to the output directory that will store our final
+# output with labels/annotations along with the number of images to
+# sample
+OUTPUT_IMAGE_PATH = os.path.sep.join(["/content/drive/MyDrive/fire-dataset/store_op", "/content/drive/MyDrive/fire-dataset/fire_dataset/fire_image/fire.2.png"])
+SAMPLE_SIZE = 50
+
+import matplotlib
+matplotlib.use("Agg")
+
+# import the necessary packages
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.utils import to_categorical
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+from imutils import paths
+import matplotlib.pyplot as plt
+import numpy as np
+import argparse
+import cv2
+import sys
+
+def load_dataset(datasetPath):
+	# grab the paths to all images in our dataset directory, then
+	# initialize our lists of images
+	imagePaths = list(paths.list_images(datasetPath))
+	data = []
+	# loop over the image paths
+	for imagePath in imagePaths:
+			image = cv2.imread(imagePath)
+			image = cv2.resize(image, (128, 128))
+			data.append(image)
+
+
+	# return the data list as a NumPy array
+	return np.array(data, dtype="float32")
+
+# construct the argument parser and parse the arguments
+ap = argparse.ArgumentParser()
+ap.add_argument("-f", "--lr-find", type=int, default=0,help="whether or not to find optimal learning rate")
+#args = vars(ap.parse_args())
+
+# load the fire and non-fire images
+print("[INFO] loading data...")
+fireData = load_dataset( FIRE_PATH)
+nonFireData = load_dataset( NON_FIRE_PATH)
+print("[INFO] Completed")
+
+print(fireData.shape)
+print(nonFireData.shape)
+
+# construct the class labels for the data
+fireLabels = np.ones((fireData.shape[0],))
+nonFireLabels = np.zeros((nonFireData.shape[0],))
+# stack the fire data with the non-fire data, then scale the data
+# to the range [0, 1]
+data = np.vstack([fireData, nonFireData])
+labels = np.hstack([fireLabels, nonFireLabels])
+
+
+data /= 255
+# perform one-hot encoding on the labels and account for skew in the
+# labeled data
+labels = to_categorical(labels, num_classes=2)
+
+
+# Perform class weighting
+classTotals = labels.sum(axis=0)
+classWeight = classTotals.max() / classTotals
+classWeight
+
+print(data.shape)
+print(labels.shape)
+print(labels[1:])
+print(classTotals)
+
+
+(trainX, testX, trainY, testY) = train_test_split(data, labels,test_size= TEST_SPLIT, random_state=42)
+
+%matplotlib inline
+import numpy as np
+plt.figure()
+image_rgb = cv2.cvtColor(trainX[np.random.randint(700)], cv2.COLOR_BGR2RGB)
+plt.imshow(image_rgb)
+plt.colorbar()
+plt.grid(False)
+plt.show()
+
+%load_ext tensorboard
+
+!rm -rf ./logs/ #to delete previous runs
+%tensorboard --logdir logs/
+tensorboard = TensorBoard(log_dir="./logs", histogram_freq=1)
+# initialize the training data augmentation object
+INIT_LR=0.001
+NUM_EPOCHS=20
+BATCH_SIZE=20
+
+# aug = ImageDataGenerator(
+# 	rotation_range=30,
+# 	zoom_range=0.15,
+# 	width_shift_range=0.2,
+# 	height_shift_range=0.2,
+# 	shear_range=0.15,
+# 	horizontal_flip=True,
+# 	fill_mode="nearest")
+aug = ImageDataGenerator(
+	rotation_range=40,
+	zoom_range=0.6,
+	width_shift_range=0.5,
+	height_shift_range=0.5,
+	shear_range=0.15,
+	horizontal_flip=True,
+	fill_mode="nearest")
+
+# initialize the optimizer and model
+print("[INFO] compiling model...")
+# opt = tf.keras.optimizers.SGD(lr= INIT_LR, momentum=0.9)
+opt = tf.keras.optimizers.Adam(INIT_LR)
+model3 = FireDetectionNet.build(width=128, height=128, depth=3,classes=2)
+model3.compile(loss="binary_crossentropy", optimizer=opt,metrics=["accuracy"])
+
+# check to see if we are attempting to find an optimal learning rate
+# before training for the full number of epochs
+
+# train the network
+print("[INFO] training network...")
+
+#H=model.fit(trainX,trainY,epochs=NUM_EPOCHS)
+# Create class weights dictionary
+class_weight_dict = {0: classWeight[0], 1: classWeight[1]}
+
+
+# Train the network
+# Train the network
+H = model3.fit(
+    x=aug.flow(trainX, trainY, batch_size=BATCH_SIZE),
+    steps_per_epoch=trainX.shape[0] // BATCH_SIZE,
+    epochs=NUM_EPOCHS,
+    class_weight=class_weight_dict,
+    verbose=1,
+    validation_data=(testX, testY),
+    callbacks=[tensorboard]
+)
+
+
+
+# evaluate the network and show a classification report
+print("[INFO] evaluating network...")
+predictions = model3.predict(testX, batch_size= BATCH_SIZE)
+print(classification_report(testY.argmax(axis=1),predictions.argmax(axis=1), target_names= CLASSES))
+print(predictions)
+
+# serialize the model to disk
+print("[INFO] serializing network to '{}'...".format( MODEL_PATH))
+#model.save( MODEL_PATH)
+
+%matplotlib inline
+import matplotlib.pyplot as plt
+print(H.history["loss"])
+N = np.arange(0, NUM_EPOCHS)
+print(N)
+plt.plot(N,H.history["loss"])
+import matplotlib.pyplot as plt
+import numpy as np
+
+N = np.arange(0,  NUM_EPOCHS)
+
+plt.style.use("ggplot")
+fig = plt.figure()
+plt.plot(N, H.history["loss"], label="train_loss")
+plt.plot(N, H.history["accuracy"], label="train_acc")
+
+plt.title("Training Loss and Accuracy")
+plt.xlabel("Epoch #")
+plt.ylabel("Loss/Accuracy")
+plt.legend(loc="lower left")
+
+plt.figure(figsize=(10,10))
+for i in range(25):
+    plt.subplot(5,5,i+1)
+    plt.xticks([])
+    plt.yticks([])
+    plt.grid(False)
+    image_rgb = cv2.cvtColor(trainX[i], cv2.COLOR_BGR2RGB)
+    plt.imshow(image_rgb , cmap=plt.cm.binary)
+    if trainY[i][0] == 1:
+      if predictions[i][0] > 0.5:
+        plt.xlabel("Non-Fire",color="green",fontsize=15)
+      else:
+        plt.xlabel("Non-Fire", color='red',fontsize=15)
+    else:
+      if predictions[i][1] > 0.5:
+        plt.xlabel("Fire", color='green',fontsize=15)
+      else:
+        plt.xlabel("Fire", color='red',fontsize=15)
+
+plt.show()
+
+model_path=('/content/drive/My Drive/firedata/fire_model_13.h5')
+model3.save(model_path)
+
+def create_mask_for_plant(image):
+    image_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    lower_hsv = np.array([0,0,250])
+    upper_hsv = np.array([250,255,255])
+
+    mask = cv2.inRange(image_hsv, lower_hsv, upper_hsv)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,11))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    return mask
+
+
+def extract_plant(image):
+
+    mask= create_mask_for_plant(image)
+    plant_roi = cv2.bitwise_and(image, image, mask=mask)
+    return plant_roi
+#image segmentation function
+def segment_image(image):
+    mask = create_mask_for_plant(image)
+    output = cv2.bitwise_and(image, image, mask = mask)
+    return output/255
+
+#sharpen the image
+def sharpen_image(image):
+    image_blurred = cv2.GaussianBlur(image, (0, 0), 3)
+    image_sharp = cv2.addWeighted(image, 1.5, image_blurred, -0.4, 0)
+    return image_sharp
+
+# function to get an image
+def Read_img(filepath, size):
+    img = image.load_img(os.path.join(data_folder, filepath), target_size=size)
+    #convert image to array
+    img = image.img_to_array(img)
+    return img
+
+
+
+def read_img(file_path, size):
+    image1 = Image.open(file_path)
+    image = image1.resize(size)
+    return image
+
+#photo='/content/drive/MyDrive/fire-dataset/fire_dataset/new_fire_images/fire.1.png'
+photo='/content/drive/MyDrive/fire-dataset/fire_dataset/non_fire_images/non_fire.1.png'
+
+ph = Read_img(photo, (128, 128))
+
+ph = np.expand_dims(ph, axis=0)
+pred = model3.predict(ph)
+
+non_fire_index = round(pred[0][0])
+fire_index=round(pred[0][1])
+
+
+if non_fire_index==fire_index:
+  print("!  model crashed  !")
+elif non_fire_index==1:
+  print("!! no fire detected  !!")
+elif fire_index==1:
+  print("Warning fire detected")
+  import cv2
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  # Resize the image_masked_orig
+  img = Read_img(photo, (255, 255))
+  photo_copy = extract_plant(img)
+  resized_image = cv2.resize(photo_copy, (512, 512))
+
+  # Convert the resized image to grayscale
+  image_gray = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
+
+  # Apply threshold to convert the image to binary
+  _, binary_image = cv2.threshold(image_gray, 127, 255, cv2.THRESH_BINARY)
+
+  # Convert the binary image to CV_8U data type
+  binary_image = np.uint8(binary_image)
+
+  # Find connected components and their centroids
+  num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_image)
+
+  # Create a figure and axes
+  fig, ax = plt.subplots()
+
+
+  # Plot the image with the center of the image as the origin
+  ax.imshow(resized_image, cmap='gray', extent=[-256, 256, -256, 256])
+
+  # Iterate through the connected components
+  for label in range(1, num_labels):  # Exclude background label 0
+      x, y, width, height, area = stats[label]
+      # Calculate the center point within the bounding box
+      center_x = int(x + width / 2) - 256
+      center_y = -int(y + height / 2) + 256  # Reverse the y-coordinate to match the image coordinate system
+
+      # Output the pixel location of the center point
+      pixel_location = (center_x, center_y)
+
+      # Output the pixel location of the center point
+      print(f"Center of white spot {label}: Pixel location {pixel_location}")
+
+      # Plot a marker at the center point
+      ax.plot(center_x, center_y, 'ro')
+
+  # Set the x and y axes limits
+  ax.set_xlim(-256, 256)
+  ax.set_ylim(-256, 256)
+
+  # Set the x and y axes labels
+  ax.set_xlabel('X')
+  ax.set_ylabel('Y')
+
+  # Show the plot
+  plt.show()
+else:
+  print("model crashed")
+pred
